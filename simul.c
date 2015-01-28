@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 
+// *** Compteur d'instruction ***
+int cptInstrution = 0;
+
 /**********************************************************
 ** Codage d'une instruction (32 bits)
 ***********************************************************/
@@ -28,9 +31,19 @@ WORD mem[128];     /* memoire                       */
 ** Codes associes aux instructions
 ***********************************************************/
 
-#define INST_ADD	(0)
-#define INST_SUB	(1)
-#define INST_CMP	(2)
+#define INST_ADD	  (0)
+#define INST_SUB	  (1)
+#define INST_CMP	  (2)
+#define INST_IFGT   (3)
+#define INST_NOP    (4)
+#define INST_JUMP   (5)
+#define INST_HALT   (6)
+#define INST_SYSC   (7)
+
+/**********************************************************
+** Codes associes aux instructions
+***********************************************************/
+
 
 
 /**********************************************************
@@ -51,11 +64,16 @@ void make_inst(int adr, unsigned code, unsigned i, unsigned j, short arg) {
 ** Codes associes aux interruptions
 ***********************************************************/
 
+#define INT_NONE  (0)
 #define INT_INIT	(1)
 #define INT_SEGV	(2)
 #define INT_INST	(3)
 #define INT_TRACE	(4)
+#define INT_CLOCK (5)
 
+// *** SYSC interruption *** 
+#define SYSC_EXIT (0)
+#define SYSC_PUTI (1)
 
 /**********************************************************
 ** Le Mot d'Etat du Processeur (PSW)
@@ -110,24 +128,56 @@ PSW cpu(PSW m) {
 	m.RI = inst.in;
 	/*** execution de l'instruction ***/
 	switch (m.RI.OP) {
-	case INST_ADD:
-		m = cpu_ADD(m);
-		break;
-	case INST_SUB:
-		m = cpu_SUB(m);
-		break;
-	case INST_CMP:
-		m = cpu_CMP(m);
-		break;
-	default:
-		/*** interruption instruction inconnue ***/
-		m.IN = INT_INST;
-		return (m);
+    
+    case INST_ADD:
+      m = cpu_ADD(m);
+      break;
+    
+    case INST_SUB:
+      m = cpu_SUB(m);
+      break;
+    
+    case INST_CMP:
+      m = cpu_CMP(m);
+      break;
+    
+    case INST_IFGT:
+      if( m.AC > 0 )
+        m.PC = m.RI.ARG;
+      else
+        ++m.PC;
+      break;
+
+    case INST_NOP:
+      ++m.PC;
+      break;
+
+    case INST_JUMP:
+      m.PC = m.RI.ARG;
+      break;
+
+    case INST_HALT:
+      break;
+
+    case INST_SYSC:
+      if( m.RI.ARG == SYSC_EXIT )
+        m.IN = SYSC_EXIT;
+      else if( m.RI.ARG == SYSC_PUTI )
+        m.IN = SYSC_PUTI;
+    break;
+
+    default:
+      /*** interruption instruction inconnue ***/
+      m.IN = INT_INST;
+      return (m);
 	}
 
 	/*** interruption apres chaque instruction ***/
-	m.IN = INT_TRACE;
-	return m;
+  if( (++cptInstrution & 0x3) == 0x3 && m.IN == INT_NONE )
+    m.IN = INT_CLOCK;
+
+  
+  return m;
 }
 
 
@@ -140,11 +190,23 @@ PSW systeme_init(void) {
 
 	printf("Booting.\n");
 	/*** creation d'un programme ***/
-	make_inst(0, INST_SUB, 2, 2, -1000); /* R2 -= R2-1000 */
-	make_inst(1, INST_ADD, 1, 2, 500);   /* R1 += R2+500 */
-	make_inst(2, INST_ADD, 0, 2, 200);   /* R0 += R2+200 */
-	make_inst(3, INST_ADD, 0, 1, 100);   /* R0 += R1+100 */
-	
+	// make_inst(0, INST_SUB, 2, 2, -1000); /* R2 -= R2-1000 */
+	// make_inst(1, INST_ADD, 1, 2, 500);   /* R1 += R2+500 */
+	// make_inst(2, INST_ADD, 0, 2, 200);   /* R0 += R2+200 */
+	// make_inst(3, INST_ADD, 0, 1, 100);   /* R0 += R1+100 */
+
+  make_inst( 0, INST_SUB, 1, 1, 0 );
+  make_inst( 1, INST_SUB, 2, 2, -1000 );
+  make_inst( 2, INST_SUB, 3, 3, -10 );
+  make_inst( 3, INST_CMP, 1, 2, 0 );
+  make_inst( 4, INST_IFGT, 0, 0, 10 );
+  make_inst( 5, INST_NOP, 0, 0, 0 );
+  make_inst( 6, INST_NOP, 0, 0, 0 );
+  make_inst( 7, INST_NOP, 0, 0, 0 );
+  make_inst( 8, INST_ADD, 1, 3, 0 );
+  make_inst( 9, INST_JUMP, 0, 0, 3 );
+  make_inst( 10, INST_HALT, 0, 0, 0 );
+
 	/*** valeur initiale du PSW ***/
 	memset (&cpu, 0, sizeof(cpu));
 	cpu.PC = 0;
@@ -163,13 +225,34 @@ PSW systeme(PSW m) {
 	switch (m.IN) {
 		case INT_INIT:
 			return (systeme_init());
+
 		case INT_SEGV:
+      printf( "%d - INT_SEGV received...\n", m.IN );
+      exit( INT_SEGV );
 			break;
-		case INT_TRACE:
+		
+    case INT_TRACE:
+      printf( "%d - INT_TRACE received...\nPC : %d\nDR : \n", m.IN, m.PC );
+      for( int i = 0; i < 8; ++i )
+        printf( "\tDR[%d] : %d\n", i, m.DR[i] );
 			break;
-		case INT_INST:
+		
+    case INT_INST:
+      printf( "%d - INT_INST received...\n", m.IN );
+      exit( INT_INST );
 			break;
+
+    case INT_CLOCK:
+      break;
+
+    // *** SYSC interruption
+    case SYSC_EXIT:
+      exit( 0 );
 	}
+
+
+  //system( "sleep 0.05" );
+  m.IN = INT_NONE;
 	return m;
 }
 
