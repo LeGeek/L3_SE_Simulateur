@@ -15,7 +15,7 @@ $(EXEC): $(OBJ)
 
 clean:
 	@echo "Clean .o files"
-	rm -rf */*.o
+	rm -rf *.o
 
 mrproper: clean
 	@echo "Remove $(EXEC) file"
