@@ -39,6 +39,7 @@ WORD mem[128];     /* memoire                       */
 #define INST_JUMP   (5)
 #define INST_HALT   (6)
 #define INST_SYSC   (7)
+#define INST_LOAD   (8)
 
 /**********************************************************
 ** Codes associes aux instructions
@@ -165,6 +166,22 @@ PSW cpu(PSW m) {
       else if( m.RI.ARG == SYSC_PUTI )
         m.IN = SYSC_PUTI;
     break;
+
+    case INST_LOAD:
+      m.AC = m.DR[ m.RI.j ] + m.RI.ARG;
+      if( m.AC < 0 || m.AC > m.SS )
+      {
+        m.IN = INT_SEGV;
+      }
+      else
+      {
+        m.AC = mem[ m.SB + m.AC ]
+        m.DR[ m.RI.i ] = m.AC;
+        m.PC += 1;
+      }
+      break;
+
+
 
     default:
       /*** interruption instruction inconnue ***/
