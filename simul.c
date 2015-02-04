@@ -6,6 +6,7 @@
 // *** Compteur d'instruction ***
 int cptInstrution = 0;
 
+
 /**********************************************************
 ** Codage d'une instruction (32 bits)
 ***********************************************************/
@@ -73,8 +74,9 @@ void make_inst(int adr, unsigned code, unsigned i, unsigned j, short arg) {
 #define INT_CLOCK (5)
 
 // *** SYSC interruption *** 
-#define SYSC_EXIT (0)
-#define SYSC_PUTI (1)
+#define SYSC_EXIT 			(100)
+#define SYSC_PUTI			 	(101)
+#define SYSC_NEW_THREAD	(102)
 
 /**********************************************************
 ** Le Mot d'Etat du Processeur (PSW)
@@ -90,6 +92,21 @@ typedef struct PSW {    /* Processor Status Word */
 	INST RI;        /* Registre instruction */
 } PSW;
 
+/*********************************************************
+** Représentation de l'ensemble des processus
+**********************************************************/
+#define MAX_PROCESS (20)
+
+#define EMPTY		(0)
+#define READY		(1)
+
+struct
+{
+	PSW cpu;
+	int state;
+} process[ MAX_PROCESS ];
+
+int current_process = -1;
 
 /**********************************************************
 ** Simulation de la CPU (mode utilisateur)
@@ -116,10 +133,27 @@ PSW cpu_CMP(PSW m) {
 	return m;
 }
 
+PSW cpu_LOAD( PSW m )
+{
+	m.AC = m.DR[ m.RI.j ] + m.RI.ARG;
+	if( m.AC < 0 || m.AC > m.SS )
+	{
+		m.IN = INT_SEGV;
+	}
+	else
+	{
+		m.AC = mem[ m.SB + m.AC ];
+		m.DR[ m.RI.i ] = m.AC;
+		m.PC += 1;
+	}
+
+	return m;
+}
+
 /* Simulation de la CPU */
 PSW cpu(PSW m) {
 	union { WORD word; INST in; } inst;
-	
+
 	/*** lecture et decodage de l'instruction ***/
 	if (m.PC < 0 || m.PC >= m.SS) {
 		m.IN = INT_SEGV;
@@ -146,7 +180,7 @@ PSW cpu(PSW m) {
       if( m.AC > 0 )
         m.PC = m.RI.ARG;
       else
-        ++m.PC;
+      ++m.PC;
       break;
 
     case INST_NOP:
@@ -161,24 +195,12 @@ PSW cpu(PSW m) {
       break;
 
     case INST_SYSC:
-      if( m.RI.ARG == SYSC_EXIT )
-        m.IN = SYSC_EXIT;
-      else if( m.RI.ARG == SYSC_PUTI )
-        m.IN = SYSC_PUTI;
+      m.IN = m.RI.ARG;
+			++m.PC;
     break;
 
     case INST_LOAD:
-      m.AC = m.DR[ m.RI.j ] + m.RI.ARG;
-      if( m.AC < 0 || m.AC > m.SS )
-      {
-        m.IN = INT_SEGV;
-      }
-      else
-      {
-        m.AC = mem[ m.SB + m.AC ]
-        m.DR[ m.RI.i ] = m.AC;
-        m.PC += 1;
-      }
+			cpu_LOAD( m );
       break;
 
 
@@ -205,6 +227,10 @@ PSW cpu(PSW m) {
 PSW systeme_init(void) {
 	PSW cpu;
 
+	current_process = -1;
+	for( int i = 0; i < MAX_PROCESS; ++i )
+		process[ i ].state = EMPTY;
+
 	printf("Booting.\n");
 	/*** creation d'un programme ***/
 	// make_inst(0, INST_SUB, 2, 2, -1000); /* R2 -= R2-1000 */
@@ -215,20 +241,31 @@ PSW systeme_init(void) {
   make_inst( 0, INST_SUB, 1, 1, 0 );
   make_inst( 1, INST_SUB, 2, 2, -1000 );
   make_inst( 2, INST_SUB, 3, 3, -10 );
-  make_inst( 3, INST_CMP, 1, 2, 0 );
-  make_inst( 4, INST_IFGT, 0, 0, 10 );
-  make_inst( 5, INST_NOP, 0, 0, 0 );
-  make_inst( 6, INST_NOP, 0, 0, 0 );
-  make_inst( 7, INST_NOP, 0, 0, 0 );
-  make_inst( 8, INST_ADD, 1, 3, 0 );
-  make_inst( 9, INST_JUMP, 0, 0, 3 );
-  make_inst( 10, INST_HALT, 0, 0, 0 );
+  make_inst( 3, INST_SYSC, 1, 0, SYSC_PUTI );
+  make_inst( 4, INST_SYSC, 2, 0, SYSC_PUTI );
+  make_inst( 5, INST_SYSC, 3, 0, SYSC_PUTI );
+  make_inst( 6, INST_CMP, 1, 2, 0 );
+  make_inst( 7, INST_IFGT, 0, 0, 14 );
+  make_inst( 8, INST_NOP, 0, 0, 0 );
+  make_inst( 9, INST_NOP, 0, 0, 0 );
+  make_inst( 10, INST_NOP, 0, 0, 0 );
+  make_inst( 11, INST_ADD, 1, 3, 0 );
+  make_inst( 12, INST_SYSC, 1, 0, SYSC_PUTI );
+  make_inst( 13, INST_JUMP, 0, 0, 6 );
+  make_inst( 14, INST_HALT, 0, 0, 0 );
+
 
 	/*** valeur initiale du PSW ***/
 	memset (&cpu, 0, sizeof(cpu));
 	cpu.PC = 0;
 	cpu.SB = 0;
 	cpu.SS = 20;
+
+	process[0].cpu = cpu;
+	process[0].state = READY;
+	process[1].cpu = cpu;
+	process[1].state = READY;
+	current_process = 0;
 
 	return cpu;
 }
@@ -259,12 +296,42 @@ PSW systeme(PSW m) {
       exit( INT_INST );
 			break;
 
+
     case INT_CLOCK:
+			if( current_process != -1 )
+			{
+				process[ current_process ].cpu = m;
+				process[ current_process ].state = READY;
+			}
+
+			do
+			{
+				current_process = (current_process + 1) % MAX_PROCESS;
+			}
+			while( process[ current_process ].state != READY );
+			
+			return process[ current_process ].cpu;
       break;
 
     // *** SYSC interruption
+		case SYSC_PUTI:
+			printf( "SYSC_PUTI : %d\n", m.DR[ m.RI.i ] );
+			break;
+
     case SYSC_EXIT:
       exit( 0 );
+
+		case SYSC_NEW_THREAD:
+			int tmpId = -1;
+			do
+			{
+				tmpId = current_process + 1 % MAX_PROCESS;
+			}
+			while( process[ tmpId ].state = EMPTY );
+			m.DR
+
+		default:
+			break;
 	}
 
 
